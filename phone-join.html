@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAVQonnect - Appel Téléphone</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .phone-container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+        }
+
+        .phone-icon {
+            width: 80px;
+            height: 80px;
+            background: #4CAF50;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            color: white;
+            font-size: 32px;
+        }
+
+        .phone-icon.connecting {
+            background: #FF9800;
+            animation: pulse 2s infinite;
+        }
+
+        .phone-icon.connected {
+            background: #4CAF50;
+        }
+
+        .phone-icon.error {
+            background: #F44336;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 24px;
+        }
+
+        .status {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+
+        .status.connecting {
+            color: #FF9800;
+        }
+
+        .status.connected {
+            color: #4CAF50;
+        }
+
+        .status.error {
+            color: #F44336;
+        }
+
+        .controls {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            margin-top: 30px;
+        }
+
+        .btn {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 50px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn-mute {
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .btn-mute:hover {
+            background: #e0e0e0;
+        }
+
+        .btn-mute.muted {
+            background: #F44336;
+            color: white;
+        }
+
+        .btn-hangup {
+            background: #F44336;
+            color: white;
+        }
+
+        .btn-hangup:hover {
+            background: #d32f2f;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .error-message {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            border-left: 4px solid #F44336;
+        }
+
+        .info-message {
+            background: #e3f2fd;
+            color: #1565c0;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            border-left: 4px solid #2196F3;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #FF9800;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="phone-container">
+        <div class="phone-icon" id="phoneIcon">
+            📞
+        </div>
+        
+        <h1>SAVQonnect</h1>
+        <div class="status" id="status">Connexion en cours...</div>
+        
+        <div id="errorMessage" class="error-message hidden"></div>
+        <div id="infoMessage" class="info-message hidden"></div>
+        
+        <div class="controls" id="controls" style="display: none;">
+            <button class="btn btn-mute" id="muteBtn">
+                <span>🔇</span>
+                <span id="muteText">Muet</span>
+            </button>
+            <button class="btn btn-hangup" id="hangupBtn">
+                <span>📞</span>
+                <span>Raccrocher</span>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Configuration du backend principal (détection automatique)
+        const API_BASE = window.location.origin;
+        const ROLE = 'phone';
+        
+        // État de l'application
+        let roomId = null;
+        let pc = null;
+        let localStream = null;
+        let eventSource = null;
+        let isMuted = false;
+        let isConnected = false;
+        
+        // Éléments DOM
+        const phoneIcon = document.getElementById('phoneIcon');
+        const status = document.getElementById('status');
+        const errorMessage = document.getElementById('errorMessage');
+        const infoMessage = document.getElementById('infoMessage');
+        const controls = document.getElementById('controls');
+        const muteBtn = document.getElementById('muteBtn');
+        const muteText = document.getElementById('muteText');
+        const hangupBtn = document.getElementById('hangupBtn');
+        
+        // Initialisation
+        async function init() {
+            try {
+                // Récupérer le roomId depuis l'URL
+                const params = new URLSearchParams(window.location.search);
+                roomId = params.get('roomId');
+                
+                if (!roomId) {
+                    showError('Room ID manquant dans l\'URL');
+                    return;
+                }
+                
+                updateStatus('Connexion en cours...', 'connecting');
+                
+                // Obtenir les serveurs ICE
+                const iceServers = await getIceServers();
+                
+                // Créer la connexion WebRTC
+                pc = new RTCPeerConnection({ iceServers });
+                
+                // Obtenir le stream audio
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+                
+                // Ajouter les tracks au peer connection
+                localStream.getTracks().forEach(track => {
+                    pc.addTrack(track, localStream);
+                });
+                
+                // Configurer les gestionnaires d'événements
+                setupEventHandlers();
+                
+                // Se connecter au canal SSE
+                connectSSE();
+                
+                // Créer et envoyer l'offer
+                await createAndSendOffer();
+                
+            } catch (error) {
+                console.error('Erreur d\'initialisation:', error);
+                showError('Erreur de connexion: ' + error.message);
+            }
+        }
+        
+        // Obtenir les serveurs ICE
+        async function getIceServers() {
+            try {
+                const response = await fetch(`${API_BASE}/webrtc/ice`);
+                const data = await response.json();
+                return data.iceServers;
+            } catch (error) {
+                console.warn('Impossible d\'obtenir les serveurs ICE, utilisation des serveurs par défaut');
+                return [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
+                ];
+            }
+        }
+        
+        // Configurer les gestionnaires d'événements
+        function setupEventHandlers() {
+            // ICE candidates
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendSignal('candidate', event.candidate);
+                }
+            };
+            
+            // Connexion établie
+            pc.onconnectionstatechange = () => {
+                console.log('État de connexion:', pc.connectionState);
+                if (pc.connectionState === 'connected') {
+                    updateStatus('Appel connecté', 'connected');
+                    controls.style.display = 'flex';
+                    isConnected = true;
+                } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+                    updateStatus('Connexion perdue', 'error');
+                    cleanup();
+                }
+            };
+            
+            // Gestionnaires de boutons
+            muteBtn.addEventListener('click', toggleMute);
+            hangupBtn.addEventListener('click', hangup);
+        }
+        
+        // Se connecter au canal SSE
+        function connectSSE() {
+            eventSource = new EventSource(`${API_BASE}/rtc/sse?roomId=${roomId}&role=${ROLE}`);
+            
+            eventSource.onmessage = async (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    await handleSSEMessage(message);
+                } catch (error) {
+                    console.error('Erreur de traitement du message SSE:', error);
+                }
+            };
+            
+            eventSource.onerror = (error) => {
+                console.error('Erreur SSE:', error);
+                showError('Connexion perdue avec le serveur');
+            };
+        }
+        
+        // Traiter les messages SSE
+        async function handleSSEMessage(message) {
+            switch (message.type) {
+                case 'connected':
+                    console.log('Connecté au canal SSE');
+                    break;
+                    
+                case 'answer':
+                    await pc.setRemoteDescription(message.data);
+                    break;
+                    
+                case 'candidate':
+                    await pc.addIceCandidate(message.data);
+                    break;
+                    
+                case 'hangup':
+                    updateStatus('Appel terminé', 'error');
+                    cleanup();
+                    break;
+                    
+                case 'heartbeat':
+                    // Maintenir la connexion
+                    break;
+                    
+                default:
+                    console.log('Message SSE non traité:', message);
+            }
+        }
+        
+        // Créer et envoyer l'offer
+        async function createAndSendOffer() {
+            try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                await sendSignal('offer', offer);
+            } catch (error) {
+                console.error('Erreur lors de la création de l\'offer:', error);
+                showError('Erreur lors de l\'établissement de la connexion');
+            }
+        }
+        
+        // Envoyer un signal
+        async function sendSignal(type, data) {
+            try {
+                await fetch(`${API_BASE}/rtc/signal`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        roomId: roomId,
+                        role: ROLE,
+                        type: type,
+                        data: data
+                    })
+                });
+            } catch (error) {
+                console.error('Erreur lors de l\'envoi du signal:', error);
+            }
+        }
+        
+        // Basculer le mode muet
+        function toggleMute() {
+            if (!localStream) return;
+            
+            isMuted = !isMuted;
+            localStream.getAudioTracks().forEach(track => {
+                track.enabled = !isMuted;
+            });
+            
+            muteBtn.classList.toggle('muted', isMuted);
+            muteText.textContent = isMuted ? 'Activer' : 'Muet';
+        }
+        
+        // Raccrocher
+        async function hangup() {
+            updateStatus('Appel terminé', 'error');
+            await sendSignal('hangup', null);
+            cleanup();
+        }
+        
+        // Nettoyer les ressources
+        function cleanup() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            
+            controls.style.display = 'none';
+            isConnected = false;
+        }
+        
+        // Mettre à jour le statut
+        function updateStatus(text, type) {
+            status.textContent = text;
+            status.className = `status ${type}`;
+            phoneIcon.className = `phone-icon ${type}`;
+            
+            if (type === 'connecting') {
+                phoneIcon.innerHTML = '<div class="loading"></div>';
+            } else if (type === 'connected') {
+                phoneIcon.innerHTML = '📞';
+            } else if (type === 'error') {
+                phoneIcon.innerHTML = '❌';
+            }
+        }
+        
+        // Afficher une erreur
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.remove('hidden');
+            updateStatus('Erreur', 'error');
+        }
+        
+        // Afficher une info
+        function showInfo(message) {
+            infoMessage.textContent = message;
+            infoMessage.classList.remove('hidden');
+        }
+        
+        // Gestion de la fermeture de la page
+        window.addEventListener('beforeunload', () => {
+            if (isConnected) {
+                sendSignal('hangup', null);
+            }
+        });
+        
+        // Démarrer l'application
+        init();
+    </script>
+</body>
+</html>
